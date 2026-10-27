@@ -244,6 +244,7 @@
   function reasonLine(reasons) {
     if (!reasons || !reasons.length) return "";
     var parts = reasons.map(function (r) {
+      if (r.score === null || r.score === undefined) return esc(r.label);
       return esc(r.label) + " (" + Math.round(r.score * 100) + "%)";
     });
     if (parts.length === 1) return "Because you love " + parts[0];
@@ -262,7 +263,9 @@
 
   function renderTasteStatus(statusList) {
     if (!statusList || !statusList.length) { hide(tasteStatusEl); return; }
-    var matched = statusList.filter(function (s) { return s.status === "matched"; }).map(function (s) { return s.label; });
+    var matched = statusList.filter(function (s) { return s.status === "matched"; }).map(function (s) {
+      return s.readAs ? s.label + " (read as " + s.readAs + ")" : s.label;
+    });
     var missed = statusList.filter(function (s) { return s.status !== "matched"; }).map(function (s) { return s.label; });
     var html = "";
     if (matched.length) {
@@ -311,6 +314,7 @@
             '<span class="city-country">' + esc(countryLine) + "</span>" +
           "</span>" +
           (reason ? '<span class="city-reason">' + reason + "</span>" : "") +
+          (city.story ? '<span class="city-story">' + esc(city.story) + "</span>" : "") +
           (tags.length
             ? '<span class="city-tags">' + tags.map(function (t) {
                 return '<span class="tag">' + esc(t) + "</span>";

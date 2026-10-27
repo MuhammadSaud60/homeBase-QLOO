@@ -139,3 +139,44 @@ def compose_first_month_with_gemini(destination, tastes, places):
     if not out_weeks:
         raise RuntimeError("Gemini produced no valid weeks")
     return {"weeks": out_weeks}
+
+
+def compose_city_lines(cities):
+    """One honest line per city: what it is like, plus one trade-off.
+    Grounded only in the Qloo data given (tags, reasons, country); never
+    invent a venue, a price or a specific fact. Returns {city name: line}.
+    Raises on any Gemini failure so the caller can skip lines silently."""
+    city_list = [
+        {
+            "name": c.get("name"),
+            "country": c.get("country"),
+            "tags": (c.get("tags") or [])[:4],
+            "reasons": [r.get("label") for r in (c.get("reasons") or [])],
+            "fitScore": c.get("fitScore"),
+        }
+        for c in cities
+    ]
+    prompt = (
+        "You are a relocation guide writing one line per city for someone choosing where to move. "
+        "For each city, write ONE sentence, at most 140 characters, saying what the city feels like "
+        "AND one honest trade-off. Ground every word in the tags and reasons given; "
+        "do not invent a venue, a price, a neighbourhood or any specific fact. "
+        "If the tags give you nothing to say about the feel, say what the tags do show and name the trade-off plainly. "
+        "Keep the tone plain and human, no marketing words.\n"
+        "Return JSON ONLY, no other text, in this exact shape:\n"
+        '{"lines":[{"name":"City Name","line":"One sentence with a trade-off."}]}\n'
+        f"Cities:\n{json.dumps(city_list)}"
+    )
+    parsed = _call_gemini(prompt, 1024)
+    out = {}
+    for item in (parsed.get("lines") or []):
+        name = (item or {}).get("name")
+        line = ((item or {}).get("line") or "").strip()
+        if not name or not line:
+            continue
+        if name not in {c.get("name") for c in cities}:
+            continue
+        out[name] = line[:140]
+    if not out:
+        raise RuntimeError("Gemini produced no city lines")
+    return out

@@ -371,9 +371,17 @@ h3 { font-size: 20px; margin: 0 0 6px; }
 }
 .city-country { color: var(--muted); font-size: 15px; }
 .city-reason {
+  display: block;
   margin: 8px 0 0;
   color: #43554c;
   font-size: 15px;
+}
+.city-story {
+  display: block;
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+  font-style: italic;
 }
 .city-tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .tag {

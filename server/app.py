@@ -95,8 +95,22 @@ def resolve_tastes(clean):
             if hit is None:
                 status.append({"label": t["label"], "kind": t["kind"], "status": "unmatched"})
                 continue
+            read_as = None
             if t["kind"] == "cuisine" and hit.get("type") == "urn:entity:place":
                 tag = qloo.search_tag(t["label"], "urn:entity:place")
+                if not tag:
+                    # No tag for the full phrase: retry with a simpler term.
+                    # Only the tag endpoint is retried, never entity search:
+                    # a simpler word can match the wrong thing as an entity
+                    # ("chai" is a band), while a tag stays food.
+                    words = [w for w in (t["label"].split() or []) if len(w) >= 3]
+                    for term in ([words[-1], words[0]] if words else []):
+                        if term.lower() == t["label"].lower():
+                            continue
+                        tag = qloo.search_tag(term, "urn:entity:place")
+                        if tag:
+                            read_as = tag["name"]
+                            break
                 if tag:
                     tag_signals.append({"label": t["label"], "tagId": tag["id"]})
                     signals.append({**t, "entityId": hit["id"], "placeOnly": True})
@@ -105,7 +119,10 @@ def resolve_tastes(clean):
                     signals.append({**t, "entityId": hit["id"]})
             else:
                 signals.append({**t, "entityId": hit["id"]})
-            status.append({"label": t["label"], "kind": t["kind"], "status": "matched"})
+            entry = {"label": t["label"], "kind": t["kind"], "status": "matched"}
+            if read_as:
+                entry["readAs"] = read_as
+            status.append(entry)
         except Exception as err:
             print("taste resolve failed:", t["label"], err)
             status.append({"label": t["label"], "kind": t["kind"], "status": "unmatched"})
@@ -122,6 +139,11 @@ def confidence_for(affinity):
 
 RRF_K = 60
 RRF_TAKE = 20
+# Fixed floor for the displayed fit number: the fused score of a city that
+# is #1 in exactly one list, 1 / (k + 1). Anchoring the bottom here instead
+# of at the observed minimum means the number only spreads when the raw
+# scores really do, and five near-identical cities all read near 95.
+RRF_FLOOR = 1.0 / (RRF_K + 1)
 
 
 def _city_key(c):
@@ -308,17 +330,17 @@ def cities():
         picked = pick_top_diverse(fused, limit=5, max_per_country=2)
         # The displayed number must follow the ranking, so it is the fused
         # RRF score rescaled across the five shown results: best 95%,
-        # fifth 70%. Qloo's affinity is compressed (0.80-0.82 across the
-        # list) and comes from a different ordering, so showing it made
-        # the order look like a bug.
+        # fifth 70%. The bottom is anchored at the fixed floor (a city #1
+        # in exactly one list), not at the observed minimum, so the spread
+        # reflects the real gap instead of stretching small differences.
         _scores = [item["rrfScore"] for item in picked]
         _hi = max(_scores) if _scores else 0.0
-        _lo = min(_scores) if _scores else 0.0
 
         def rescaled_fit(item):
-            if _hi <= _lo:
+            if _hi <= RRF_FLOOR:
                 return 82
-            return round(70 + 25 * (item["rrfScore"] - _lo) / (_hi - _lo))
+            value = 70 + 25 * (item["rrfScore"] - RRF_FLOOR) / (_hi - RRF_FLOOR)
+            return max(70, min(95, round(value)))
 
         top = []
         for item in picked:
@@ -340,15 +362,26 @@ def cities():
             ] if total else []
             if len({r["label"] for r in share_reasons}) > len({r["label"] for r in expl}):
                 reasons = share_reasons
+                from_shares = True
             else:
                 reasons = expl if expl else share_reasons
+                from_shares = False
+            # A city matched by exactly one taste is not a blend: show the
+            # taste without a percentage (100% would claim all inputs agree)
+            # and badge it as a single-taste match.
+            single_taste = from_shares and len(share_reasons) == 1
+            if single_taste:
+                reasons = [{"label": share_reasons[0]["label"], "score": None}]
+                confidence = {"label": "Single-taste match", "level": "loose"}
+            else:
+                confidence = confidence_for(fit_score / 100)
             top.append({
                 "name": c["name"],
                 "country": c.get("country") or "",
                 "countryCode": c.get("countryCode") or "",
                 "region": c.get("region") or "",
                 "fitScore": fit_score,
-                "confidence": confidence_for(fit_score / 100),
+                "confidence": confidence,
                 "reasons": reasons,
                 "tags": (c.get("tags") or [])[:4],
                 "qlooEntityId": c.get("entity_id"),
@@ -365,6 +398,17 @@ def cities():
         if best_affinity < 0.6:
             note = ("Qloo found only a loose match for these tastes. Treat this ranking as a starting point, "
                     "not a verdict. Try swapping in a musician or film with a wider audience.")
+
+        # One honest line per city, written by Gemini from Qloo's data.
+        # A failure here must never break the ranking: no lines, no error.
+        if top and llm.is_live():
+            try:
+                stories = llm.compose_city_lines(top)
+                for c in top:
+                    if c["name"] in stories:
+                        c["story"] = stories[c["name"]]
+            except Exception as err:
+                print("city lines failed:", err)
 
         return jsonify({"ok": True, "meta": {"qlooLive": qloo.is_live()}, "cities": top, "tasteStatus": taste_status, "note": note})
     except Exception as err:
