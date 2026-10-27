@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>HomeBase | Find the city that fits your taste</title>
+<meta name="description" content="Tell HomeBase what you love. We rank cities by cultural fit, then build your first month in the city you pick.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="nav">
+  <div class="nav-inner">
+    <a class="wordmark" href="#" id="wordmark">
+      <span class="wordmark-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M10 21v-6h4v6"/></svg>
+      </span>
+      Home<span>Base</span>
+    </a>
+  </div>
+</header>
+
+<main>
+  <div class="progress" id="progress" aria-label="Progress">
+    <div class="progress-step is-active" data-step="1">
+      <span class="progress-dot">1</span>
+      <span class="progress-label">Your taste</span>
+    </div>
+    <span class="progress-line" aria-hidden="true"></span>
+    <div class="progress-step" data-step="2">
+      <span class="progress-dot">2</span>
+      <span class="progress-label">Your city</span>
+    </div>
+    <p class="progress-text" id="progress-text">Step 1 of 2</p>
+  </div>
+
+  <section id="step-tastes" class="step">
+    <div class="hero">
+      <p class="eyebrow">Moving somewhere new?</p>
+      <h1>Find the city that <em>fits</em> your taste.</h1>
+      <p class="pitch">Three things you love. Five cities that fit. One first month that feels like home.</p>
+      <svg class="stamp" viewBox="0 0 120 120" aria-hidden="true">
+        <defs><path id="stamp-circle" d="M60,60 m-44,0 a44,44 0 1,1 88,0 a44,44 0 1,1 -88,0"/></defs>
+        <circle cx="60" cy="60" r="58" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="3 3"/>
+        <circle cx="60" cy="60" r="34" fill="none" stroke="currentColor" stroke-width="1.5"/>
+        <text font-size="11" letter-spacing="2" fill="currentColor" font-family="Inter, sans-serif" font-weight="700"><textPath href="#stamp-circle">FIND YOUR CITY &#8226; HOMEBASE &#8226; </textPath></text>
+        <path d="M50 68V58l10-8 10 8v10h-6v-7h-8v7z" fill="currentColor"/>
+      </svg>
+    </div>
+
+    <form id="taste-form" class="card form-card" novalidate>
+      <fieldset class="tastes">
+        <legend>What do you love?</legend>
+        <p class="tastes-hint">Add 3 to 5 things. An artist, a film, a food, a brand. Anything that feels like you.</p>
+        <div id="taste-rows"></div>
+        <div class="taste-actions">
+          <button type="button" class="link-btn" id="add-taste-btn">+ Add another</button>
+          <button type="button" class="link-btn" id="example-btn">Try an example</button>
+        </div>
+      </fieldset>
+
+      <p class="form-error" id="form-error" role="alert" hidden></p>
+      <div class="perf" aria-hidden="true"></div>
+      <button type="submit" class="cta" id="find-btn">Find my city</button>
+      <p class="form-note">No account, no quiz. Just your taste, ranked by Qloo.</p>
+    </form>
+  </section>
+
+  <section id="step-cities" class="step" hidden>
+    <button type="button" class="back-btn" data-back="tastes">&larr; Back to your taste</button>
+    <div class="section-head">
+      <p class="eyebrow">Step 2 of 2</p>
+      <h2>Cities that fit you</h2>
+      <p class="section-sub" id="cities-sub"></p>
+    </div>
+    <p class="server-note" id="cities-note" hidden></p>
+    <div id="city-list" class="city-list"></div>
+  </section>
+
+  <section id="step-plan" class="step" hidden>
+    <button type="button" class="back-btn" data-back="cities">&larr; Try another city</button>
+    <div class="section-head">
+      <p class="eyebrow">Your first month</p>
+      <h2 id="plan-title"></h2>
+      <p class="section-sub" id="plan-sub"></p>
+    </div>
+    <p class="server-note" id="plan-note" hidden></p>
+
+    <div class="matches card" id="matches-block" hidden>
+      <h3>Your favourites, translated</h3>
+      <ul class="matches-list" id="matches-list"></ul>
+    </div>
+
+    <div id="weeks-list"></div>
+
+    <div class="plan-foot">
+      <button type="button" class="cta cta-secondary" data-back="cities">Try another city</button>
+      <button type="button" class="cta" id="restart-btn">Start over with new taste</button>
+    </div>
+  </section>
+
+  <section class="loading" id="loading" hidden>
+    <div class="spinner" aria-hidden="true"></div>
+    <p class="loading-main" id="loading-text">Asking Qloo where you fit&hellip;</p>
+    <p class="loading-sub">This usually takes a few seconds.</p>
+  </section>
+
+  <section class="error-box" id="error-box" role="alert" hidden>
+    <h2>That did not work out</h2>
+    <p id="error-text"></p>
+    <button type="button" class="cta" id="retry-btn">Try again</button>
+  </section>
+</main>
+
+<footer class="footer">
+  <p>HomeBase &middot; Built for the Qloo Agentic Hackathon &middot; City fit powered by Qloo</p>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>
