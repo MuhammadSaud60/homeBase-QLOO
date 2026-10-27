@@ -76,14 +76,23 @@ def resolve_tastes(clean):
     status = []
     for t in clean:
         try:
-            hit = qloo.search_taste(t["label"])
-            if not hit:
+            candidates = qloo.search_taste_candidates(t["label"])
+            if not candidates:
                 status.append({"label": t["label"], "kind": t["kind"], "status": "unmatched"})
                 continue
             # Qloo fuzzy-matches almost anything, so check the hit is really this taste:
             # the first word of what the user typed must appear in the matched name.
             first = _first_word(t["label"])
-            if first and first not in (hit.get("name") or "").lower():
+            passing = [h for h in candidates
+                       if not first or first in (h.get("name") or "").lower()]
+            if not passing:
+                status.append({"label": t["label"], "kind": t["kind"], "status": "unmatched"})
+                continue
+            # Books cannot be Qloo insights signals (the endpoint rejects
+            # them), so prefer the first non-book match: a book title that
+            # is also a film resolves to the film.
+            hit = next((h for h in passing if h.get("type") != "urn:entity:book"), None)
+            if hit is None:
                 status.append({"label": t["label"], "kind": t["kind"], "status": "unmatched"})
                 continue
             if t["kind"] == "cuisine" and hit.get("type") == "urn:entity:place":
@@ -178,7 +187,9 @@ def pick_top_diverse(fused, limit=5, max_per_country=2):
     """Pick the top cities, at most `max_per_country` per country, so four
     near-identical results from one country cannot fill the list. The
     remaining slots are filled from lower ranks. If the cap leaves fewer
-    than `limit` cities, it is relaxed rather than showing a short list."""
+    than `limit` cities, it is relaxed rather than showing a short list.
+    The result is always re-sorted by fused score, so the displayed order
+    never disagrees with the displayed percentage."""
     picked = []
     picked_keys = set()
     counts = {}
@@ -199,6 +210,7 @@ def pick_top_diverse(fused, limit=5, max_per_country=2):
             if _city_key(item["city"]) in picked_keys:
                 continue
             picked.append(item)
+    picked.sort(key=lambda item: -item["rrfScore"])
     return picked
 
 
@@ -239,6 +251,7 @@ def cities():
 
         per_taste_lists = []
         combined_list = []
+        invalid_labels = set()
 
         def run_job(job):
             label, kind, _id = job
@@ -265,11 +278,22 @@ def cities():
                         per_taste_lists.append((label, cities))
                 except Exception as err:
                     print("qloo per-taste insights failed:", futures[fut], err)
+                    # Qloo rejected this taste's entity as a signal, so the
+                    # taste contributes nothing: report it as unread rather
+                    # than claiming Qloo read it.
+                    if "were invalid" in str(err):
+                        invalid_labels.add(futures[fut])
             try:
                 combined_list = combined_future.result() or []
             except Exception as err:
                 print("qloo combined insights failed:", err)
                 combined_list = []
+
+        if invalid_labels:
+            taste_status = [
+                {**s, "status": "unmatched"} if s["label"] in invalid_labels else s
+                for s in taste_status
+            ]
 
         if not per_taste_lists and not combined_list:
             return jsonify({"ok": False, "error": "Qloo is not answering right now. Try again in a minute."}), 502
@@ -281,43 +305,64 @@ def cities():
                 "error": "Qloo has no city match for these tastes. Try a musician or film with a bigger audience, or a different cuisine.",
             })
 
+        picked = pick_top_diverse(fused, limit=5, max_per_country=2)
+        # The displayed number must follow the ranking, so it is the fused
+        # RRF score rescaled across the five shown results: best 95%,
+        # fifth 70%. Qloo's affinity is compressed (0.80-0.82 across the
+        # list) and comes from a different ordering, so showing it made
+        # the order look like a bug.
+        _scores = [item["rrfScore"] for item in picked]
+        _hi = max(_scores) if _scores else 0.0
+        _lo = min(_scores) if _scores else 0.0
+
+        def rescaled_fit(item):
+            if _hi <= _lo:
+                return 82
+            return round(70 + 25 * (item["rrfScore"] - _lo) / (_hi - _lo))
+
         top = []
-        for item in pick_top_diverse(fused, limit=5, max_per_country=2):
+        for item in picked:
             c = item["city"]
-            affinity = item["combinedAffinity"]
-            if affinity is None:
-                affinity = item["bestTasteAffinity"]
-            if affinity is None:
-                affinity = 0.7
-            if item["fromCombined"] and c.get("explainability"):
-                reasons = [
-                    {"label": e["label"], "score": e["score"]}
-                    for e in (c.get("explainability") or [])[:2]
-                ]
+            fit_score = rescaled_fit(item)
+            # Reasons: whichever source names more of the user's tastes,
+            # up to three. Qloo's explainability never cites tag tastes
+            # (cuisine), while the fused shares cover every taste; the
+            # shares win only when they name more tastes.
+            expl = [
+                {"label": e["label"], "score": e["score"]}
+                for e in (c.get("explainability") or [])[:3]
+            ] if item["fromCombined"] else []
+            total = sum(item["perTaste"].values())
+            shares_sorted = sorted(item["perTaste"].items(), key=lambda kv: -kv[1])
+            share_reasons = [
+                {"label": lab, "score": round(v / total * 100) / 100}
+                for lab, v in shares_sorted[:3]
+            ] if total else []
+            if len({r["label"] for r in share_reasons}) > len({r["label"] for r in expl}):
+                reasons = share_reasons
             else:
-                # The city comes from the per-taste lists only: attribute
-                # it by each taste's share of its fused score.
-                total = sum(item["perTaste"].values())
-                shares = sorted(item["perTaste"].items(), key=lambda kv: -kv[1])
-                reasons = [
-                    {"label": lab, "score": round(v / total * 100) / 100}
-                    for lab, v in shares[:2]
-                ] if total else []
+                reasons = expl if expl else share_reasons
             top.append({
                 "name": c["name"],
                 "country": c.get("country") or "",
                 "countryCode": c.get("countryCode") or "",
                 "region": c.get("region") or "",
-                "fitScore": round(affinity * 100),
-                "confidence": confidence_for(affinity),
+                "fitScore": fit_score,
+                "confidence": confidence_for(fit_score / 100),
                 "reasons": reasons,
                 "tags": (c.get("tags") or [])[:4],
                 "qlooEntityId": c.get("entity_id"),
             })
 
-        best = top[0]["fitScore"] / 100
+        # The loose-match note still judges Qloo's own affinity underneath,
+        # not the rescaled number.
+        best_affinity = picked[0]["combinedAffinity"] if picked else None
+        if best_affinity is None and picked:
+            best_affinity = picked[0]["bestTasteAffinity"]
+        if best_affinity is None:
+            best_affinity = 0.7
         note = None
-        if best < 0.6:
+        if best_affinity < 0.6:
             note = ("Qloo found only a loose match for these tastes. Treat this ranking as a starting point, "
                     "not a verdict. Try swapping in a musician or film with a wider audience.")
 

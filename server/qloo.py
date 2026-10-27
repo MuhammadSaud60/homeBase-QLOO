@@ -9,7 +9,7 @@ BASE = "https://hackathon.api.qloo.com"
 TIMEOUT = 30
 
 
-def real_search(query):
+def real_search_all(query, limit=5):
     res = requests.get(
         f"{BASE}/search",
         params={"query": query},
@@ -19,15 +19,22 @@ def real_search(query):
     if not res.ok:
         raise RuntimeError(f"Qloo search failed ({res.status_code})")
     results = (res.json() or {}).get("results") or []
+    out = []
+    for top in results[:limit]:
+        types = top.get("types") or []
+        out.append({
+            "id": top.get("entity_id") or top.get("id"),
+            "name": top.get("name") or query,
+            "type": types[0] if types else (top.get("type") or None),
+        })
+    return out
+
+
+def real_search(query):
+    results = real_search_all(query, limit=1)
     if not results:
         return None
-    top = results[0]
-    types = top.get("types") or []
-    return {
-        "id": top.get("entity_id") or top.get("id"),
-        "name": top.get("name") or query,
-        "type": types[0] if types else (top.get("type") or None),
-    }
+    return results[0]
 
 
 VISIT_DENY_TAGS = [
@@ -308,6 +315,10 @@ def is_live():
 
 def search_taste(label):
     return real_search(label)
+
+
+def search_taste_candidates(label):
+    return real_search_all(label, limit=5)
 
 
 def get_place_insights(destination, tastes, signal_entity_ids, signal_labels, take=30):
