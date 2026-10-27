@@ -59,6 +59,7 @@
 
   var citiesSub = document.getElementById("cities-sub");
   var citiesNote = document.getElementById("cities-note");
+  var tasteStatusEl = document.getElementById("taste-status");
   var cityList = document.getElementById("city-list");
 
   var planTitle = document.getElementById("plan-title");
@@ -259,10 +260,28 @@
     return "badge-loose";
   }
 
+  function renderTasteStatus(statusList) {
+    if (!statusList || !statusList.length) { hide(tasteStatusEl); return; }
+    var matched = statusList.filter(function (s) { return s.status === "matched"; }).map(function (s) { return s.label; });
+    var missed = statusList.filter(function (s) { return s.status !== "matched"; }).map(function (s) { return s.label; });
+    var html = "";
+    if (matched.length) {
+      html += "Qloo read: " + esc(matched.join(", ")) + ".";
+    }
+    if (missed.length) {
+      html += ' <span class="taste-missed">Could not read: ' + esc(missed.join(", ")) +
+        ". Try a simpler word.</span>";
+    }
+    if (!html) { hide(tasteStatusEl); return; }
+    tasteStatusEl.innerHTML = html;
+    show(tasteStatusEl);
+  }
+
   function renderCities(data) {
     state.cities = data.cities || [];
     citiesSub.textContent = "Ranked for your love of " + tasteSummary(state.tastes) + ".";
     setNote(citiesNote, data.note);
+    renderTasteStatus(data.tasteStatus);
     cityList.innerHTML = "";
 
     if (!state.cities.length) {
@@ -299,10 +318,10 @@
             : "") +
         "</span>" +
         '<span class="city-side">' +
+          (conf.label ? '<span class="badge ' + badgeClass(conf.level, conf.label) + '">' + esc(conf.label) + "</span>" : "") +
           '<span class="fit-score">' + esc(city.fitScore) + "<small>% fit</small></span>" +
           '<span class="fit-bar" aria-hidden="true"><span class="fit-bar-fill" style="width:' +
             Math.max(0, Math.min(100, Number(city.fitScore) || 0)) + '%"></span></span>' +
-          (conf.label ? '<span class="badge ' + badgeClass(conf.level, conf.label) + '">' + esc(conf.label) + "</span>" : "") +
           '<span class="city-go">Start my first month &rarr;</span>' +
         "</span>";
 

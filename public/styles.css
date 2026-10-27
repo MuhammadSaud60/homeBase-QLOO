@@ -396,12 +396,12 @@ h3 { font-size: 20px; margin: 0 0 6px; }
 }
 .fit-score {
   font-family: var(--serif);
-  font-size: 34px;
+  font-size: 22px;
   font-weight: 700;
   color: var(--terra);
   line-height: 1;
 }
-.fit-score small { font-size: 15px; font-weight: 600; color: var(--muted); }
+.fit-score small { font-size: 13px; font-weight: 600; color: var(--muted); }
 .fit-bar {
   width: 110px;
   height: 6px;
@@ -432,11 +432,14 @@ h3 { font-size: 20px; margin: 0 0 6px; }
 .badge-loose { color: var(--muted); }
 .city-go {
   margin-top: 2px;
-  font-size: 13.5px;
-  font-weight: 700;
-  color: var(--terra-dark);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
 }
 .city-card:hover .city-go { text-decoration: underline; }
+
+.taste-status { margin: 0 0 18px; font-size: 14px; color: var(--muted); }
+.taste-missed { color: var(--terra-dark); }
 
 .matches { padding: 22px 24px; margin-bottom: 28px; box-shadow: none; }
 .matches-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }

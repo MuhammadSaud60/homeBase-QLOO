@@ -61,24 +61,45 @@ def clean_tastes(body):
     return out
 
 
+def _first_word(text):
+    for part in (text or "").lower().replace(",", " ").split():
+        cleaned = "".join(ch for ch in part if ch.isalnum())
+        if cleaned:
+            return cleaned
+    return ""
+
+
 def resolve_tastes(clean):
     signals = []
     tag_signals = []
+    status = []
     for t in clean:
         try:
             hit = qloo.search_taste(t["label"])
             if not hit:
+                status.append({"label": t["label"], "kind": t["kind"], "status": "unmatched"})
+                continue
+            # Qloo fuzzy-matches almost anything, so check the hit is really this taste:
+            # the first word of what the user typed must appear in the matched name.
+            first = _first_word(t["label"])
+            if first and first not in (hit.get("name") or "").lower():
+                status.append({"label": t["label"], "kind": t["kind"], "status": "unmatched"})
                 continue
             if t["kind"] == "cuisine" and hit.get("type") == "urn:entity:place":
                 tag = qloo.search_tag(t["label"], "urn:entity:place")
                 if tag:
                     tag_signals.append({"label": t["label"], "tagId": tag["id"]})
-                signals.append({**t, "entityId": hit["id"], "placeOnly": True})
+                    signals.append({**t, "entityId": hit["id"], "placeOnly": True})
+                else:
+                    # No cuisine tag: keep the entity as a signal instead of dropping the taste.
+                    signals.append({**t, "entityId": hit["id"]})
             else:
                 signals.append({**t, "entityId": hit["id"]})
+            status.append({"label": t["label"], "kind": t["kind"], "status": "matched"})
         except Exception as err:
             print("taste resolve failed:", t["label"], err)
-    return signals, tag_signals
+            status.append({"label": t["label"], "kind": t["kind"], "status": "unmatched"})
+    return signals, tag_signals, status
 
 
 def confidence_for(affinity):
@@ -97,7 +118,7 @@ def cities():
         if len(clean) < 3:
             return jsonify({"ok": False, "error": "Add 3 to 5 things you love, so Qloo has taste to rank with."}), 400
 
-        signals, tag_signals = resolve_tastes(clean)
+        signals, tag_signals, taste_status = resolve_tastes(clean)
         entity_signals = [s for s in signals if not s.get("placeOnly")]
         if not entity_signals and not tag_signals:
             return jsonify({"ok": False, "error": "Qloo could not read your tastes. Try different examples."}), 502
@@ -146,7 +167,7 @@ def cities():
             note = ("Qloo found only a loose match for these tastes. Treat this ranking as a starting point, "
                     "not a verdict. Try swapping in a musician or film with a wider audience.")
 
-        return jsonify({"ok": True, "meta": {"qlooLive": qloo.is_live()}, "cities": top, "note": note})
+        return jsonify({"ok": True, "meta": {"qlooLive": qloo.is_live()}, "cities": top, "tasteStatus": taste_status, "note": note})
     except Exception as err:
         print("cities error:", err)
         return jsonify({"ok": False, "error": "Something went wrong ranking cities. Try again."}), 500
@@ -164,7 +185,7 @@ def first_month():
         if not clean:
             return jsonify({"ok": False, "error": "Add at least one thing you love, so Qloo has taste to work with."}), 400
 
-        signals, _tag_signals = resolve_tastes(clean)
+        signals, _tag_signals, _taste_status = resolve_tastes(clean)
         if not signals:
             return jsonify({"ok": False, "error": "Qloo could not read your tastes. Try different examples."}), 502
         signal_ids = [s["entityId"] for s in signals if s.get("entityId")]
