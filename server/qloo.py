@@ -239,16 +239,7 @@ def real_search_tag(query, parent_type):
     return {"id": top.get("id") or top.get("tag_id"), "name": top.get("name") or query}
 
 
-def real_destination_insights(signal_entity_ids, signal_tag_ids, signal_labels, take=10):
-    params = {
-        "filter.type": "urn:entity:destination",
-        "feature.explainability": "true",
-        "take": str(take),
-    }
-    if signal_entity_ids:
-        params["signal.interests.entities"] = ",".join(signal_entity_ids)
-    if signal_tag_ids:
-        params["signal.interests.tags"] = ",".join(signal_tag_ids)
+def _destination_query(params, signal_labels):
     res = requests.get(
         f"{BASE}/v2/insights",
         params=params,
@@ -270,12 +261,45 @@ def real_destination_insights(signal_entity_ids, signal_tag_ids, signal_labels, 
         seen.add(key)
         out.append(n)
     out.sort(key=lambda x: -x["affinity"])
+    return out
+
+
+def _drop_region_duplicates(out):
     city_names = {f"{c['countryCode']}|{c['name'].lower()}" for c in out}
     return [
         c for c in out
         if not (c["region"] and c["name"].lower() != c["region"].lower()
                 and f"{c['countryCode']}|{c['region'].lower()}" in city_names)
     ]
+
+
+def real_destination_insights(signal_entity_ids, signal_tag_ids, signal_labels, take=10):
+    params = {
+        "filter.type": "urn:entity:destination",
+        "feature.explainability": "true",
+        "take": str(take),
+    }
+    if signal_entity_ids:
+        params["signal.interests.entities"] = ",".join(signal_entity_ids)
+    if signal_tag_ids:
+        params["signal.interests.tags"] = ",".join(signal_tag_ids)
+    return _drop_region_duplicates(_destination_query(params, signal_labels))
+
+
+def real_destination_insights_single(entity_id=None, tag_id=None, label=None, take=20):
+    """One taste on its own: a single entity or a single cuisine tag.
+    Used for the per-taste lists that RRF fuses. Returns Qloo rank order."""
+    params = {
+        "filter.type": "urn:entity:destination",
+        "feature.explainability": "true",
+        "take": str(take),
+    }
+    if entity_id:
+        params["signal.interests.entities"] = entity_id
+    if tag_id:
+        params["signal.interests.tags"] = tag_id
+    labels = {entity_id: label} if entity_id and label else {}
+    return _drop_region_duplicates(_destination_query(params, labels))
 
 
 def is_live():
@@ -306,3 +330,9 @@ def get_destination_insights(tastes, signal_entity_ids, signal_tag_ids, signal_l
 
 def search_tag(query, parent_type):
     return real_search_tag(query, parent_type)
+
+
+def get_destination_insights_single(entity_id=None, tag_id=None, label=None, take=20):
+    return real_destination_insights_single(
+        entity_id=entity_id, tag_id=tag_id, label=label, take=take or 20,
+    )

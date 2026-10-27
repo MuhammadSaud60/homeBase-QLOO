@@ -1,6 +1,7 @@
 """HomeBase server. Flask app serving public/ and the /api endpoints."""
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request, send_from_directory
@@ -110,6 +111,97 @@ def confidence_for(affinity):
     return {"label": "Loose fit", "level": "loose"}
 
 
+RRF_K = 60
+RRF_TAKE = 20
+
+
+def _city_key(c):
+    return f"{c.get('countryCode') or ''}|{(c.get('name') or '').lower()}"
+
+
+def fuse_city_rankings(per_taste_lists, combined_list):
+    """Reciprocal Rank Fusion (Cormack, Clarke, Buettcher 2009):
+    score(city) = sum over lists of 1 / (k + rank), k = 60, rank 1-based.
+    Only rank positions count, never raw affinities, so no single taste's
+    score scale can swamp the others.
+
+    The fused lists are one ranked list per taste, PLUS the combined
+    all-tastes list as one more list. The combined list matters because
+    some cities only emerge for the full combination: Hong Kong and
+    Singapore never top any single-taste list for Taylor Swift + Blade
+    Runner + ramen, yet they are the best joint match. Each list is one
+    equal voice; a city needs support from more than one list to lead.
+    """
+    fused = {}
+    records = {}
+    from_combined = set()
+    combined_affinity = {}
+    best_taste_affinity = {}
+    per_taste = {}
+    for label, cities in per_taste_lists:
+        for i, c in enumerate(cities):
+            key = _city_key(c)
+            r = 1.0 / (RRF_K + i + 1)
+            fused[key] = fused.get(key, 0.0) + r
+            per_taste.setdefault(key, {})[label] = per_taste.get(key, {}).get(label, 0.0) + r
+            if key not in records:
+                records[key] = c
+            aff = c.get("affinity")
+            if isinstance(aff, (int, float)):
+                best_taste_affinity[key] = max(best_taste_affinity.get(key, 0.0), aff)
+    for i, c in enumerate(combined_list or []):
+        key = _city_key(c)
+        r = 1.0 / (RRF_K + i + 1)
+        fused[key] = fused.get(key, 0.0) + r
+        # Prefer the combined record: its explainability attributes the
+        # city to the tastes jointly, which is what the UI shows.
+        records[key] = c
+        from_combined.add(key)
+        aff = c.get("affinity")
+        if isinstance(aff, (int, float)):
+            combined_affinity[key] = aff
+    ranked = sorted(fused.items(), key=lambda kv: -kv[1])
+    out = []
+    for key, score in ranked:
+        out.append({
+            "city": records[key],
+            "rrfScore": score,
+            "fromCombined": key in from_combined,
+            "combinedAffinity": combined_affinity.get(key),
+            "bestTasteAffinity": best_taste_affinity.get(key),
+            "perTaste": per_taste.get(key, {}),
+        })
+    return out
+
+
+def pick_top_diverse(fused, limit=5, max_per_country=2):
+    """Pick the top cities, at most `max_per_country` per country, so four
+    near-identical results from one country cannot fill the list. The
+    remaining slots are filled from lower ranks. If the cap leaves fewer
+    than `limit` cities, it is relaxed rather than showing a short list."""
+    picked = []
+    picked_keys = set()
+    counts = {}
+    for item in fused:
+        if len(picked) >= limit:
+            break
+        key = _city_key(item["city"])
+        bucket = item["city"].get("countryCode") or key
+        if counts.get(bucket, 0) >= max_per_country:
+            continue
+        counts[bucket] = counts.get(bucket, 0) + 1
+        picked.append(item)
+        picked_keys.add(key)
+    if len(picked) < limit:
+        for item in fused:
+            if len(picked) >= limit:
+                break
+            if _city_key(item["city"]) in picked_keys:
+                continue
+            picked.append(item)
+    return picked
+
+
 @app.post("/api/cities")
 def cities():
     try:
@@ -125,37 +217,99 @@ def cities():
         signal_ids = [s["entityId"] for s in entity_signals if s.get("entityId")]
         signal_labels = {s["entityId"]: s["label"] for s in entity_signals if s.get("entityId")}
 
-        try:
-            cities = qloo.get_destination_insights(
+        # One ranked list per taste (a cuisine taste runs on its tag when
+        # one was found, otherwise on its place entity), plus the combined
+        # all-tastes list. Fused with RRF so no single taste can sweep
+        # the top five. A failed list is skipped, not fatal.
+        tag_by_label = {t["label"]: t["tagId"] for t in tag_signals}
+        jobs = []
+        seen_labels = set()
+        for s in signals:
+            label = s["label"]
+            if label in seen_labels:
+                continue
+            seen_labels.add(label)
+            if s.get("placeOnly"):
+                if label in tag_by_label:
+                    jobs.append((label, "tag", tag_by_label[label]))
+                else:
+                    jobs.append((label, "entity", s["entityId"]))
+            else:
+                jobs.append((label, "entity", s["entityId"]))
+
+        per_taste_lists = []
+        combined_list = []
+
+        def run_job(job):
+            label, kind, _id = job
+            if kind == "tag":
+                return label, qloo.get_destination_insights_single(tag_id=_id, label=label, take=RRF_TAKE)
+            return label, qloo.get_destination_insights_single(entity_id=_id, label=label, take=RRF_TAKE)
+
+        def run_combined():
+            return qloo.get_destination_insights(
                 tastes=clean,
                 signal_entity_ids=signal_ids,
                 signal_tag_ids=[t["tagId"] for t in tag_signals],
                 signal_labels=signal_labels,
-                take=10,
+                take=RRF_TAKE,
             )
-        except Exception as err:
-            print("qloo destination insights failed:", err)
+
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            futures = {pool.submit(run_job, j): j[0] for j in jobs}
+            combined_future = pool.submit(run_combined)
+            for fut in list(futures):
+                try:
+                    label, cities = fut.result()
+                    if cities:
+                        per_taste_lists.append((label, cities))
+                except Exception as err:
+                    print("qloo per-taste insights failed:", futures[fut], err)
+            try:
+                combined_list = combined_future.result() or []
+            except Exception as err:
+                print("qloo combined insights failed:", err)
+                combined_list = []
+
+        if not per_taste_lists and not combined_list:
             return jsonify({"ok": False, "error": "Qloo is not answering right now. Try again in a minute."}), 502
 
-        if not cities:
+        fused = fuse_city_rankings(per_taste_lists, combined_list)
+        if not fused:
             return jsonify({
                 "ok": False,
                 "error": "Qloo has no city match for these tastes. Try a musician or film with a bigger audience, or a different cuisine.",
             })
 
         top = []
-        for c in cities[:5]:
-            reasons = [
-                {"label": e["label"], "score": e["score"]}
-                for e in (c.get("explainability") or [])[:2]
-            ]
+        for item in pick_top_diverse(fused, limit=5, max_per_country=2):
+            c = item["city"]
+            affinity = item["combinedAffinity"]
+            if affinity is None:
+                affinity = item["bestTasteAffinity"]
+            if affinity is None:
+                affinity = 0.7
+            if item["fromCombined"] and c.get("explainability"):
+                reasons = [
+                    {"label": e["label"], "score": e["score"]}
+                    for e in (c.get("explainability") or [])[:2]
+                ]
+            else:
+                # The city comes from the per-taste lists only: attribute
+                # it by each taste's share of its fused score.
+                total = sum(item["perTaste"].values())
+                shares = sorted(item["perTaste"].items(), key=lambda kv: -kv[1])
+                reasons = [
+                    {"label": lab, "score": round(v / total * 100) / 100}
+                    for lab, v in shares[:2]
+                ] if total else []
             top.append({
                 "name": c["name"],
                 "country": c.get("country") or "",
                 "countryCode": c.get("countryCode") or "",
                 "region": c.get("region") or "",
-                "fitScore": round(c["affinity"] * 100),
-                "confidence": confidence_for(c["affinity"]),
+                "fitScore": round(affinity * 100),
+                "confidence": confidence_for(affinity),
                 "reasons": reasons,
                 "tags": (c.get("tags") or [])[:4],
                 "qlooEntityId": c.get("entity_id"),
